@@ -1,12 +1,6 @@
 @ECHO OFF
 SETLOCAL ENABLEDELAYEDEXPANSION
 
-REM ============================================================================
-REM Script: Enhanced Sysmon Deployment Script
-REM Purpose: Deploy and manage Sysmon through Splunk TA-Sysmon-Binary
-REM Author: Enhanced Version
-REM ============================================================================
-
 SET APP_NAME=TA-Sysmon-Binary
 SET LOG_FILE=%WINDIR%\sysmon_installer.log
 SET LOCAL_SYSMON_EXE=%WINDIR%\sysmon.exe
