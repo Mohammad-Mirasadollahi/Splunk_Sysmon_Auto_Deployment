@@ -1,0 +1,53 @@
+<Sysmon schemaversion="5.0">
+    <HashAlgorithms>SHA256</HashAlgorithms>
+    <EventFiltering>
+        <!-- Rule Group for high-value process monitoring -->
+        <RuleGroup name="ProcessMonitoring" groupRelation="or">
+            <!-- Event ID 1: Process Creation. Included by default. -->
+            <ProcessCreate onmatch="include" />
+            
+            <!-- Event ID 5: Process Termination. Useful for forensics. -->
+            <ProcessTerminate onmatch="include" />
+            
+            <!-- Event ID 8: CreateRemoteThread. Key for detecting injection. -->
+            <CreateRemoteThread onmatch="include" />
+        </RuleGroup>
+
+        <!-- Rule Group for high-value network monitoring -->
+        <RuleGroup name="NetworkMonitoring" groupRelation="or">
+            <!-- Event ID 3: Network Connection. -->
+            <!-- We only include connections not made by known browsers or system processes -->
+            <!-- to reduce noise. This is an example of an 'exclude' first approach. -->
+            <NetworkConnect onmatch="exclude">
+                <Image condition="is">C:\Program Files\SplunkUniversalForwarder\bin\splunkd.exe</Image>
+                <Image condition="contains">chrome.exe</Image>
+                <Image condition="contains">firefox.exe</Image>
+                <Image condition="contains">msedge.exe</Image>
+            </NetworkConnect>
+        </RuleGroup>
+
+        <!-- Rule Group for monitoring autostart locations for persistence -->
+        <RuleGroup name="Persistence" groupRelation="or">
+            <!-- Event ID 12, 13, 14: Registry Events on common Run keys -->
+            <RegistryEvent onmatch="include">
+                <TargetObject condition="contains">CurrentVersion\Run</TargetObject>
+                <TargetObject condition="contains">Services\AutoRun</TargetObject>
+            </RegistryEvent>
+            
+            <!-- Event ID 11: File Creation in Startup folders -->
+            <FileCreate onmatch="include">
+                <TargetFilename condition="contains">AppData\Roaming\Microsoft\Windows\Start Menu\Programs\Startup</TargetFilename>
+                <TargetFilename condition="contains">\ProgramData\Microsoft\Windows\Start Menu\Programs\Startup</TargetFilename>
+            </FileCreate>
+        </RuleGroup>
+        
+        <!-- Rule Group for detecting WMI-based attacks -->
+        <RuleGroup name="WMIAbuse" groupRelation="or">
+            <!-- Event ID 19, 20, 21: WMI Events -->
+            <WmiEventFilter onmatch="include" />
+            <WmiEventConsumer onmatch="include" />
+            <WmiEventConsumerToFilter onmatch="include" />
+        </RuleGroup>
+        
+    </EventFiltering>
+</Sysmon>
