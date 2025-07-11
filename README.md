@@ -38,7 +38,7 @@ Follow these steps to set up the framework.
   ```
 
 **2. Define Your Authoritative Sysmon Configuration:**
-- Customize the following file with your own sysmon configuration. You can also use [sysmon-modular](https://github.com/olafhartong/sysmon-modular). :
+- Customize the following file with your own sysmon configuration. You can also use [sysmon-modular](https://github.com/olafhartong/sysmon-modular):
   ```
   TA_Sysmon-Config/bin/config.xml
   ```
