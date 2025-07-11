@@ -1,305 +1,244 @@
 @ECHO OFF
 SETLOCAL ENABLEDELAYEDEXPANSION
 
-SET APP_NAME=TA-Sysmon-Binary
-SET LOG_FILE=%WINDIR%\sysmon_installer.log
-SET LOCAL_SYSMON_EXE=%WINDIR%\sysmon.exe
-SET SCRIPT_VERSION=2.0
-SET MAX_RETRIES=3
+REM --- ======================================================================
+REM --- Configuration
+REM --- Define all key variables and paths in this section.
+REM --- ======================================================================
 
-REM Initialize logging with script start
-CALL :log "INFO" "action='script_start' script_version='%SCRIPT_VERSION%' app_name='%APP_NAME%' timestamp='%DATE% %TIME%'"
+REM --- The official name of the Windows service for Sysmon.
+SET "SERVICE_NAME=Sysmon"
 
-REM Check if running as Administrator
-CALL :check_admin_privileges
-IF %ERRORLEVEL% NEQ 0 (
-    CALL :log "ERROR" "action='admin_check' status='failed' message='Script requires Administrator privileges'"
-    ECHO ERROR: This script must be run as Administrator
-    PAUSE
-    EXIT /B 1
+REM --- The dedicated installation directory for all Sysmon components.
+REM --- This centralizes the executable, config, and log files.
+SET "TARGET_DIR=%WINDIR%\Sysmon"
+
+REM --- The log file for this script's execution, located within the target directory.
+SET "LOG_FILE=%TARGET_DIR%\sysmon_installer.log"
+
+REM --- A temporary file used to capture the output of Sysmon version checks.
+SET "TEMP_OUTPUT_FILE=%TEMP%\sysmon_version_check.tmp"
+
+REM --- Paths to the files bundled with this script.
+REM --- %~dp0 expands to the directory where this batch script is located.
+SET "SCRIPT_DIR=%~dp0"
+SET "LOCAL_SYSMON_EXE=%SCRIPT_DIR%Sysmon.exe"
+SET "BUNDLED_CONFIG_FILE=%SCRIPT_DIR%config.xml"
+
+REM --- Full paths to the components as they will exist on the target system.
+SET "INSTALLED_SYSMON_EXE=%TARGET_DIR%\Sysmon.exe"
+SET "FINAL_CONFIG_FILE=%TARGET_DIR%\config.xml"
+
+
+REM --- ======================================================================
+REM --- Script Execution Start
+REM --- ======================================================================
+
+REM --- Ensure the target directory exists before any logging can occur.
+IF NOT EXIST "%TARGET_DIR%" MKDIR "%TARGET_DIR%"
+
+CALL :log "INFO" "action='start_execution' script_name='deploy.bat'"
+
+REM --- Critical check: The script cannot run without the Sysmon executable.
+IF NOT EXIST "%LOCAL_SYSMON_EXE%" (
+    CALL :log "ERROR" "action='check_local_file' status='fatal' message='Sysmon.exe not found next to the script.'"
+    GOTO :EOF
 )
 
-REM Main execution flow
-CALL :main_execution
-EXIT /B %ERRORLEVEL%
-
-:main_execution
-    CALL :log "INFO" "action='main_execution' status='started'"
-    
-    REM Step 1: Find Splunk installation
-    CALL :get_splunk_path
-    IF NOT DEFINED SPLUNKPATH (
-        CALL :log "ERROR" "action='find_splunk_path' status='fatal' message='SplunkForwarder not found'"
-        ECHO ERROR: SplunkForwarder installation not found
-        EXIT /B 1
-    )
-    
-    REM Step 2: Read target version from config
-    CALL :read_target_version
-    IF NOT DEFINED TARGET_SYSMON_VERSION (
-        CALL :log "ERROR" "action='read_target_version' status='failed' message='Cannot read target version'"
-        EXIT /B 1
-    )
-    
-    REM Step 3: Validate deployment files
-    CALL :validate_deployment_files
-    IF %ERRORLEVEL% NEQ 0 (
-        CALL :log "ERROR" "action='validate_files' status='failed'"
-        EXIT /B 1
-    )
-    
-    REM Step 4: Copy binary to system directory
-    CALL :copy_binary_with_retry
-    IF %ERRORLEVEL% NEQ 0 (
-        CALL :log "ERROR" "action='copy_binary' status='failed_final'"
-        EXIT /B 1
-    )
-    
-    REM Step 5: Check current installation and determine action
+REM --- [!!!] CORE LOGIC - STEP 1: Get the currently installed version BEFORE overwriting files.
+REM --- This is critical to correctly compare the old version with the new one.
+sc query "!SERVICE_NAME!" >nul 2>&1
+IF %ERRORLEVEL% EQU 0 (
+    REM --- The service exists, so try to read its version from the existing executable.
     CALL :get_installed_version
-    CALL :determine_action
-    
-    REM Step 6: Execute determined action
-    IF "!ACTION!"=="INSTALL" (
-        CALL :install_service
-    ) ELSE IF "!ACTION!"=="UPGRADE" (
-        CALL :upgrade_service
-    ) ELSE IF "!ACTION!"=="SKIP" (
-        CALL :log "INFO" "action='version_check' status='up_to_date' message='No action needed'"
-        ECHO INFO: Sysmon is already up to date
-    )
-    
-    REM Step 7: Verify installation
-    CALL :verify_installation
-    
-    CALL :log "INFO" "action='main_execution' status='completed'"
-    ECHO SUCCESS: Sysmon deployment completed successfully
-    EXIT /B 0
+)
 
-:check_admin_privileges
-    NET SESSION >NUL 2>&1
-    EXIT /B %ERRORLEVEL%
+REM --- [!!!] CORE LOGIC - STEP 2: Prepare the environment.
+REM --- This copies the new executable and handles the config file logic.
+CALL :prepare_environment
+IF %ERRORLEVEL% NEQ 0 GOTO :cleanup
 
-:get_splunk_path
-    SET SPLUNK_PATH_METHOD=N/A
-    SET SPLUNKPATH=
-    
-    REM Method 1: Try WMI service query
-    FOR /F "tokens=1,2,*" %%a IN ('wmic service SplunkForwarder get PathName /value 2^>NUL ^| find "PathName"') DO (
-        SET SPLUNKDPATH=%%c
-        IF DEFINED SPLUNKDPATH (
-            SET SPLUNKPATH=!SPLUNKDPATH:"=!
-            SET SPLUNKPATH=!SPLUNKPATH:~0,-28!
-            SET SPLUNK_PATH_METHOD=WMI
-        )
-    )
-    
-    REM Method 2: Try registry if WMI failed
-    IF NOT DEFINED SPLUNKPATH (
-        FOR /F "tokens=2*" %%a IN ('reg query "HKLM\SOFTWARE\Splunk\SplunkUniversalForwarder" /v InstallPath 2^>NUL ^| find "InstallPath"') DO (
-            SET SPLUNKPATH=%%b
-            IF DEFINED SPLUNKPATH (SET SPLUNK_PATH_METHOD=Registry)
-        )
-    )
-    
-    REM Method 3: Try common installation paths
-    IF NOT DEFINED SPLUNKPATH (
-        FOR %%p IN ("C:\Program Files\SplunkUniversalForwarder" "C:\Program Files (x86)\SplunkUniversalForwarder") DO (
-            IF EXIST "%%~p\bin\splunk.exe" (
-                SET SPLUNKPATH=%%~p
-                SET SPLUNK_PATH_METHOD=FileSystem
-                GOTO :splunk_found
-            )
-        )
-    )
-    
-    :splunk_found
-    IF DEFINED SPLUNKPATH (
-        CALL :log "INFO" "action='find_splunk_path' status='success' method='%SPLUNK_PATH_METHOD%' path='!SPLUNKPATH!'"
-        ECHO INFO: Found Splunk at: !SPLUNKPATH!
-    ) ELSE (
-        CALL :log "ERROR" "action='find_splunk_path' status='failed' message='Splunk installation not found'"
-    )
-    EXIT /B 0
+REM --- [!!!] CORE LOGIC - STEP 3: Get the version of the new target executable.
+CALL :get_target_version
+IF NOT DEFINED TARGET_SYSMON_VERSION (
+    CALL :log "ERROR" "action='read_target_version' status='failed' message='Could not determine version from local Sysmon.exe.'"
+    GOTO :cleanup
+)
 
-:read_target_version
-    SET VERSION_CONFIG_FILE="%SPLUNKPATH%\etc\apps\%APP_NAME%\default\sysmon_version.conf"
-    SET TARGET_SYSMON_VERSION=
+REM --- [!!!] CORE LOGIC - STEP 4: Main Decision Flow.
+REM --- Compare versions and decide on the appropriate action.
+IF NOT DEFINED INSTALLED_VERSION (
+    REM --- The service was not found, so this is a first-time installation.
+    CALL :log "INFO" "action='install_check' status='not_installed'. Proceeding with first-time installation."
+    GOTO :first_time_install
+)
+
+IF "!INSTALLED_VERSION!"=="!TARGET_SYSMON_VERSION!" (
+    REM --- Versions match, no action is needed besides ensuring the service is running.
+    CALL :log "INFO" "action='version_compare' status='up_to_date'. No action needed."
+    CALL :verify_service_status
+    GOTO :cleanup
+)
+
+REM --- The installed version is different from the target version, so an upgrade is required.
+CALL :log "INFO" "action='version_compare' status='outdated' installed='!INSTALLED_VERSION!' target='!TARGET_SYSMON_VERSION!'. Proceeding with upgrade."
+GOTO :upgrade_service
+
+
+REM --- ======================================================================
+REM --- Action Blocks
+REM --- These blocks define the high-level workflows.
+REM --- ======================================================================
+
+:first_time_install
+    CALL :log "INFO" "action='first_time_install' status='starting'"
+    CALL :install_service
+    CALL :verify_service_status
+    GOTO :cleanup
+
+:upgrade_service
+    CALL :log "INFO" "action='upgrade_service' status='starting'"
+    CALL :uninstall_service
+    IF %ERRORLEVEL% NEQ 0 (
+        CALL :log "WARN" "action='upgrade_service' status='continue_after_uninstall_fail' message='Could not uninstall old version (maybe not running?). Proceeding...'"
+    )
+    CALL :force_kill_process
+    CALL :install_service
+    CALL :verify_service_status
+    GOTO :cleanup
+
+:cleanup
+    REM --- Clean up temporary files and log the end of execution.
+    IF EXIST "%TEMP_OUTPUT_FILE%" DEL "%TEMP_OUTPUT_FILE%"
+    CALL :log "INFO" "action='end_execution' script_name='deploy.bat' status='finished'"
+    GOTO :EOF
+
+
+REM --- ======================================================================
+REM --- Subroutines
+REM --- These are the functional building blocks of the script.
+REM --- ======================================================================
+
+:prepare_environment
+    CALL :log "INFO" "action='prepare_environment' status='starting'"
     
-    IF NOT EXIST %VERSION_CONFIG_FILE% (
-        CALL :log "ERROR" "action='read_target_version' status='file_missing' file='%VERSION_CONFIG_FILE%'"
+    REM --- Copy the new Sysmon executable from the script's directory to the target directory.
+    COPY /Y "%LOCAL_SYSMON_EXE%" "%INSTALLED_SYSMON_EXE%" > NUL
+    IF %ERRORLEVEL% NEQ 0 (
+        CALL :log "ERROR" "action='copy_executable' status='failed' error_code='%ERRORLEVEL%'"
         EXIT /B 1
     )
-    
-    FOR /F "tokens=2 delims==" %%v IN ('type %VERSION_CONFIG_FILE% 2^>NUL ^| find "version"') DO (
-        SET TARGET_SYSMON_VERSION=%%v
-    )
-    
-    IF DEFINED TARGET_SYSMON_VERSION (
-        SET TARGET_SYSMON_VERSION=!TARGET_SYSMON_VERSION: =!
-        CALL :log "INFO" "action='read_target_version' status='success' version='!TARGET_SYSMON_VERSION!'"
-        ECHO INFO: Target Sysmon version: !TARGET_SYSMON_VERSION!
-    ) ELSE (
-        CALL :log "ERROR" "action='read_target_version' status='failed' message='Version not found in config'"
-    )
-    EXIT /B 0
 
-:validate_deployment_files
-    SET DEPLOY_BINARY_PATH="%SPLUNKPATH%\etc\apps\%APP_NAME%\bin\sysmon.exe"
-    SET DEPLOY_CONFIG_PATH="%SPLUNKPATH%\etc\apps\%APP_NAME%\bin\config.xml"
-    
-    IF NOT EXIST %DEPLOY_BINARY_PATH% (
-        CALL :log "ERROR" "action='validate_files' status='missing_binary' file='%DEPLOY_BINARY_PATH%'"
-        ECHO ERROR: sysmon.exe not found in deployment package
-        EXIT /B 1
-    )
-    
-    IF NOT EXIST %DEPLOY_CONFIG_PATH% (
-        CALL :log "WARN" "action='validate_files' status='missing_config' file='%DEPLOY_CONFIG_PATH%'"
-        ECHO WARNING: config.xml not found in deployment package
-    )
-    
-    CALL :log "INFO" "action='validate_files' status='success'"
-    EXIT /B 0
-
-:copy_binary_with_retry
-    SET RETRY_COUNT=0
-    
-    :retry_copy
-    IF %RETRY_COUNT% GEQ %MAX_RETRIES% (
-        CALL :log "ERROR" "action='copy_binary' status='max_retries_exceeded' retries='%RETRY_COUNT%'"
-        EXIT /B 1
-    )
-    
-    SET /A RETRY_COUNT+=1
-    CALL :log "INFO" "action='copy_binary' status='attempt' retry='%RETRY_COUNT%'"
-    
-    COPY /Y %DEPLOY_BINARY_PATH% %LOCAL_SYSMON_EXE% >NUL 2>&1
-    IF %ERRORLEVEL% EQU 0 (
-        CALL :log "INFO" "action='copy_binary' status='success' retry='%RETRY_COUNT%'"
-        ECHO INFO: Binary copied successfully
-        EXIT /B 0
-    )
-    
-    CALL :log "WARN" "action='copy_binary' status='retry_needed' retry='%RETRY_COUNT%' error='%ERRORLEVEL%'"
-    TIMEOUT /T 2 /NOBREAK >NUL
-    GOTO :retry_copy
-
-:get_installed_version
-    SET ESCAPED_LOCAL_SYSMON_EXE=%WINDIR%\\sysmon.exe
-    SET INSTALLED_VERSION=
-    SET VERSION_METHOD=N/A
-    
-    IF NOT EXIST %LOCAL_SYSMON_EXE% (
-        CALL :log "INFO" "action='get_version' status='no_existing_installation'"
-        EXIT /B 0
-    )
-    
-    REM Method 1: Try WMI file version
-    FOR /F "tokens=2 delims==" %%v IN ('wmic datafile where name^="%ESCAPED_LOCAL_SYSMON_EXE%" get Version /value 2^>NUL ^| find "Version"') DO (
-        SET INSTALLED_VERSION=%%v
-        IF DEFINED INSTALLED_VERSION (SET VERSION_METHOD=WMI)
-    )
-    
-    REM Method 2: Try executable output if WMI failed
-    IF NOT DEFINED INSTALLED_VERSION (
-        FOR /F "tokens=4" %%v IN ('%LOCAL_SYSMON_EXE% -nobanner 2^>NUL') DO (
-            SET INSTALLED_VERSION=%%v
-            IF DEFINED INSTALLED_VERSION (
-                SET INSTALLED_VERSION=!INSTALLED_VERSION:v=!
-                SET VERSION_METHOD=Executable
-            )
+    REM --- Handle the configuration file with a clear priority order.
+    IF EXIST "%FINAL_CONFIG_FILE%" (
+        REM --- Priority 1: A config file already exists in the target directory. Respect user's custom config.
+        CALL :log "INFO" "action='config_check' status='found_existing' message='Using existing user config file.'"
+    ) ELSE IF EXIST "%BUNDLED_CONFIG_FILE%" (
+        REM --- Priority 2: No user config exists, so copy the bundled config file.
+        CALL :log "INFO" "action='config_check' status='found_bundled' message='Copying bundled config file to target directory.'"
+        COPY /Y "%BUNDLED_CONFIG_FILE%" "%FINAL_CONFIG_FILE%" > NUL
+        IF %ERRORLEVEL% NEQ 0 (
+            CALL :log "ERROR" "action='copy_config' status='failed' error_code='%ERRORLEVEL%'"
+            EXIT /B 1
         )
-    )
-    
-    IF DEFINED INSTALLED_VERSION (
-        CALL :log "INFO" "action='get_version' status='success' method='%VERSION_METHOD%' version='!INSTALLED_VERSION!'"
-        ECHO INFO: Current Sysmon version: !INSTALLED_VERSION!
     ) ELSE (
-        CALL :log "WARN" "action='get_version' status='failed' message='Could not determine version'"
-    )
-    EXIT /B 0
-
-:determine_action
-    SET ACTION=INSTALL
-    
-    IF NOT DEFINED INSTALLED_VERSION (
-        SET ACTION=INSTALL
-        CALL :log "INFO" "action='determine_action' decision='INSTALL' reason='no_existing_version'"
-    ) ELSE IF "!INSTALLED_VERSION!"=="!TARGET_SYSMON_VERSION!" (
-        SET ACTION=SKIP
-        CALL :log "INFO" "action='determine_action' decision='SKIP' reason='versions_match'"
-    ) ELSE (
-        SET ACTION=UPGRADE
-        CALL :log "INFO" "action='determine_action' decision='UPGRADE' reason='version_mismatch' current='!INSTALLED_VERSION!' target='!TARGET_SYSMON_VERSION!'"
+        REM --- Fatal Error: No config file available anywhere. The script cannot proceed.
+        CALL :log "ERROR" "action='config_check' status='fatal' message='No config file found. Cannot proceed.'"
+        EXIT /B 1
     )
     EXIT /B 0
 
 :install_service
-    CALL :log "INFO" "action='install_service' status='starting'"
-    ECHO INFO: Installing Sysmon service...
+    CALL :log "INFO" "action='install_service' status='starting' config_path='%FINAL_CONFIG_FILE%'"
     
-    %LOCAL_SYSMON_EXE% -accepteula -i %DEPLOY_CONFIG_PATH% >NUL 2>&1
-    IF %ERRORLEVEL% EQU 0 (
-        CALL :log "INFO" "action='install_service' status='success'"
-        ECHO SUCCESS: Sysmon service installed successfully
-    ) ELSE (
+    REM --- Install the service using the new executable and the determined config file.
+    REM --- -accepteula is crucial for non-interactive/automated execution.
+    "%INSTALLED_SYSMON_EXE%" -accepteula -i "%FINAL_CONFIG_FILE%" > NUL
+    IF %ERRORLEVEL% NEQ 0 (
         CALL :log "ERROR" "action='install_service' status='failed' error_code='%ERRORLEVEL%'"
-        ECHO ERROR: Sysmon service installation failed
-    )
-    EXIT /B %ERRORLEVEL%
-
-:upgrade_service
-    CALL :log "INFO" "action='upgrade_service' status='starting' old_version='!INSTALLED_VERSION!' new_version='!TARGET_SYSMON_VERSION!'"
-    ECHO INFO: Upgrading Sysmon service...
-    
-    REM Uninstall old version
-    CALL :log "INFO" "action='upgrade_service' status='uninstalling_old'"
-    %LOCAL_SYSMON_EXE% -u force >NUL 2>&1
-    
-    REM Wait a moment for service to fully stop
-    TIMEOUT /T 3 /NOBREAK >NUL
-    
-    REM Install new version
-    CALL :log "INFO" "action='upgrade_service' status='installing_new'"
-    %LOCAL_SYSMON_EXE% -accepteula -i %DEPLOY_CONFIG_PATH% >NUL 2>&1
-    IF %ERRORLEVEL% EQU 0 (
-        CALL :log "INFO" "action='upgrade_service' status='success'"
-        ECHO SUCCESS: Sysmon service upgraded successfully
     ) ELSE (
-        CALL :log "ERROR" "action='upgrade_service' status='failed' error_code='%ERRORLEVEL%'"
-        ECHO ERROR: Sysmon service upgrade failed
+        CALL :log "INFO" "action='install_service' status='success'"
     )
-    EXIT /B %ERRORLEVEL%
+    GOTO :EOF
 
-:verify_installation
-    CALL :log "INFO" "action='verify_installation' status='starting'"
+:uninstall_service
+    CALL :log "INFO" "action='uninstall_service' status='starting'"
     
-    REM Check if service is running
-    SC query Sysmon >NUL 2>&1
-    IF %ERRORLEVEL% EQU 0 (
-        CALL :log "INFO" "action='verify_installation' status='service_exists'"
-        
-        REM Check service status
-        FOR /F "tokens=3" %%s IN ('sc query Sysmon ^| find "STATE"') DO (
-            IF "%%s"=="RUNNING" (
-                CALL :log "INFO" "action='verify_installation' status='success' service_state='RUNNING'"
-                ECHO INFO: Sysmon service is running
-            ) ELSE (
-                CALL :log "WARN" "action='verify_installation' status='service_not_running' service_state='%%s'"
-                ECHO WARNING: Sysmon service exists but is not running
-            )
+    REM --- If the executable doesn't exist, we can assume it's not installed. Exit gracefully.
+    IF NOT EXIST "%INSTALLED_SYSMON_EXE%" ( EXIT /B 0 )
+
+    REM --- Use the '-u force' switch to ensure uninstallation proceeds even if the service state is inconsistent.
+    "%INSTALLED_SYSMON_EXE%" -u force > NUL
+    IF %ERRORLEVEL% NEQ 0 (
+        CALL :log "WARN" "action='uninstall_service' status='failed_or_not_installed' error_code='%ERRORLEVEL%'"
+        EXIT /B 1
+    )
+    CALL :log "INFO" "action='uninstall_service' status='success'"
+    EXIT /B 0
+
+:force_kill_process
+    CALL :log "INFO" "action='force_kill_process' status='starting' process_name='sysmon.exe'"
+    
+    REM --- Forcefully terminate any lingering sysmon.exe process.
+    REM --- /T also terminates any child processes.
+    REM --- Redirect output to NUL to suppress errors if the process is not found.
+    taskkill /F /IM sysmon.exe /T >nul 2>&1
+    GOTO :EOF
+
+:verify_service_status
+    CALL :log "INFO" "action='verify_service_status' status='checking' service_name='!SERVICE_NAME!'"
+    
+    REM --- Check if the service is in the RUNNING state.
+    sc query "!SERVICE_NAME!" | find "STATE" | find "RUNNING" >nul
+    IF %ERRORLEVEL% NEQ 0 (
+        REM --- If not running, attempt to start it.
+        CALL :log "WARN" "action='verify_service_status' status='not_running' message='Attempting to start the service.'"
+        net start "!SERVICE_NAME!" >nul
+        IF %ERRORLEVEL% NEQ 0 (
+            CALL :log "ERROR" "action='verify_service_status' status='start_failed' error_code='%ERRORLEVEL%'"
+        ) ELSE (
+            CALL :log "INFO" "action='verify_service_status' status='start_success'"
         )
     ) ELSE (
-        CALL :log "ERROR" "action='verify_installation' status='service_not_found'"
-        ECHO ERROR: Sysmon service not found after installation
+        CALL :log "INFO" "action='verify_service_status' status='already_running'"
     )
-    EXIT /B 0
+    GOTO :EOF
+
+:get_target_version
+    SET "TARGET_SYSMON_VERSION="
+    REM --- Read version from the executable bundled with the script.
+    "%LOCAL_SYSMON_EXE%" > "%TEMP_OUTPUT_FILE%" 2>&1
+    IF NOT EXIST "%TEMP_OUTPUT_FILE%" ( GOTO :EOF )
+    FOR /F "tokens=3" %%v IN ('findstr /B "System Monitor" "%TEMP_OUTPUT_FILE%"') DO ( SET "TARGET_SYSMON_VERSION=%%v" )
+    IF DEFINED TARGET_SYSMON_VERSION ( 
+        SET "TARGET_SYSMON_VERSION=!TARGET_SYSMON_VERSION:v=!"
+        CALL :log "INFO" "action='get_target_version' status='success' version='!TARGET_SYSMON_VERSION!'"
+    )
+    GOTO :EOF
+
+:get_installed_version
+    SET "INSTALLED_VERSION="
+    REM --- This subroutine should only be called if the service is confirmed to exist.
+    IF NOT EXIST "%INSTALLED_SYSMON_EXE%" ( 
+        GOTO :EOF 
+    )
+    REM --- Read version from the executable currently installed on the system.
+    "%INSTALLED_SYSMON_EXE%" > "%TEMP_OUTPUT_FILE%" 2>&1
+    IF NOT EXIST "%TEMP_OUTPUT_FILE%" ( GOTO :EOF )
+    FOR /F "tokens=3" %%v IN ('findstr /B "System Monitor" "%TEMP_OUTPUT_FILE%"') DO ( SET "INSTALLED_VERSION=%%v" )
+    IF DEFINED INSTALLED_VERSION ( 
+        SET "INSTALLED_VERSION=!INSTALLED_VERSION:v=!"
+        CALL :log "INFO" "action='get_installed_version' status='success' version='!INSTALLED_VERSION!'"
+    ) ELSE (
+        CALL :log "WARN" "action='get_installed_version' status='read_failed'"
+    )
+    GOTO :EOF
 
 :log
-    REM Enhanced logging with better timestamp format
-    SET LOG_TIMESTAMP=%DATE:~-4%-%DATE:~4,2%-%DATE:~7,2% %TIME:~0,8%
-    ECHO [%LOG_TIMESTAMP%] [%~1] %~2 >> "%LOG_FILE%"
-    EXIT /B 0
+    REM --- A simple logging function.
+    REM --- %~1 is the log level (e.g., INFO, ERROR)
+    REM --- %~2 is the log message string
+    ECHO timestamp="%DATE% %TIME%" level="%~1" %~2 >> "%LOG_FILE%"
+    GOTO :EOF
 
 ENDLOCAL
