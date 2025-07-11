@@ -36,13 +36,9 @@ Follow these steps to set up the framework.
   ```
   TA_Sysmon-Binary/bin/
   ```
-- Place your desired **default** `config.xml` in the same directory. This will be used for brand-new installations.
-  ```
-  TA_Sysmon-Binary/bin/
-  ```
 
 **2. Define Your Authoritative Sysmon Configuration:**
-- Open the following file:
+- Customize the following file with your own sysmon configuration. You can also use [sysmon-modular](https://github.com/olafhartong/sysmon-modular). :
   ```
   TA_Sysmon-Config/bin/config.xml
   ```
@@ -57,8 +53,9 @@ Follow these steps to set up the framework.
 ## How to Use
 
 ### To Upgrade the Sysmon Version:
-1.  Replace the `Sysmon.exe` file in `TA_Sysmon-Binary/bin/`.
-2.  On your Splunk Deployment Server, reload the deployment server (`./splunk reload deploy-server` or use the UI). The TA will be pushed, and the `deploy.bat` script will handle the upgrade.
+1.  Replace the existing Sysmon.exe file with the new one in `TA_Sysmon-Binary/bin/`.
+2.  Open the `sysmon_version.conf` file and update the version to match the new Sysmon version.
+3.  On your Splunk Deployment Server, reload the deployment server (`./splunk reload deploy-server` or use the UI). The TA will be pushed, and the `deploy.bat` script will handle the upgrade.
 
 ### To Update the Sysmon Configuration:
 1.  Edit your main configuration file: `TA_Sysmon-Config/bin/config.xml`.
