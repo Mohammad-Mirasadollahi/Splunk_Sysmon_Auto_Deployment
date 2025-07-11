@@ -1,5 +1,3 @@
-
-
 # Modular Sysmon Deployment Framework for Splunk
 
 > **Note:** This project was developed with the assistance of Google Gemini.
@@ -8,20 +6,21 @@ This project provides a robust, two-part framework for deploying and managing Sy
 
 ## Core Architecture
 
-The framework is split into two distinct Splunk Technical Add-ons (TAs) to separate software management from configuration management. Both TAs should be deployed to the same clients.
+The framework is split into two distinct Splunk Technical Add-ons (TAs) to separate software management from configuration management. Both TAs should be deployed to the same clients and are triggered by inputs defined in their `inputs.conf` files.
 
 ### 1. `TA-Sysmon-Binary` (The Installer)
-This TA is responsible for the Sysmon software lifecycle.
+This TA is responsible for the Sysmon software installation lifecycle.
 - **Manages the `sysmon.exe` binary itself.**
-- **Installs the Sysmon service** for the first time using a minimal, safe configuration.
-- **Upgrades the Sysmon service** to a new version when you update the binary.
-- **Handles uninstallation** and cleanup.
+- **Installs the Sysmon service** for the first time using the `config.xml` bundled with it as a default.
+- **Upgrades the Sysmon service** to a new version when you update the binary within the TA.
+- **Intelligently preserves existing user configurations** found in `C:\Windows\Sysmon\` during an upgrade.
+- **Handles uninstallation** and process cleanup via its `deploy.bat` script.
 - This TA should be updated infrequently, only when a new version of Sysmon is released.
 
 ### 2. `TA-Sysmon-Config` (The Configurator)
 This TA is responsible for the Sysmon configuration.
-- **Manages the authoritative Sysmon configuration** (`config.xml`).
-- **Periodically ensures** the running configuration on clients matches the one on the deployment server.
+- **Forcefully overwrites the active Sysmon configuration** with the `config.xml` bundled with it.
+- **Periodically ensures** the running configuration on clients matches the one on the deployment server via its `update.bat` script.
 - **Contains your detailed, production-ready `config.xml`** with all your custom rules.
 - This TA will be updated frequently, every time you want to change a monitoring rule.
 
@@ -31,29 +30,26 @@ This TA is responsible for the Sysmon configuration.
 
 Follow these steps to set up the framework.
 
-**1. Place the Sysmon Executable:**
+**1. Place the Sysmon Executable and Default Config:**
 - Download the latest version of Sysmon from [Sysinternals](https://docs.microsoft.com/en-us/sysinternals/downloads/sysmon).
-- Place the `sysmon.exe` file into the following directory:
+- Place the `Sysmon.exe` file into the following directory:
   ```
-  TA-Sysmon-Binary/bin/sysmon.exe
+  TA_Sysmon-Binary/bin/
+  ```
+- Place your desired **default** `config.xml` in the same directory. This will be used for brand-new installations.
+  ```
+  TA_Sysmon-Binary/bin/
   ```
 
-**2. Set the Target Sysmon Version:**
-- Open the following file in a text editor:
-  ```
-  TA-Sysmon-Binary/default/sysmon_version.conf
-  ```
-- Edit the `version` field to match the version of `sysmon.exe` you downloaded (e.g., `version = 15.15`).
-
-**3. Define Your Primary Sysmon Configuration:**
+**2. Define Your Authoritative Sysmon Configuration:**
 - Open the following file:
   ```
-  TA-Sysmon-Config/bin/config.xml
+  TA_Sysmon-Config/bin/config.xml
   ```
-- This is your primary, authoritative configuration file. Customize it with all the rules and event filters you need for your environment. The included file provides a strong starting point.
+- This is your primary, authoritative configuration file. Customize it with all the rules and event filters you need for your environment.
 
-**4. Deploy to Splunk:**
-- Copy both the `TA-Sysmon-Binary` and `TA-Sysmon-Config` folders to your Splunk Deployment Server's deployment-apps directory (e.g., `etc/deployment-apps`).
+**3. Deploy to Splunk:**
+- Copy both the `TA_Sysmon-Binary` and `TA_Sysmon-Config` folders to your Splunk Deployment Server's deployment-apps directory (e.g., `etc/deployment-apps`).
 - From the Splunk UI or CLI, assign both TAs to your desired Windows server classes.
 
 ---
@@ -61,21 +57,20 @@ Follow these steps to set up the framework.
 ## How to Use
 
 ### To Upgrade the Sysmon Version:
-1.  Replace the `sysmon.exe` file in `TA-Sysmon-Binary/bin/`.
-2.  Update the version number in `TA-Sysmon-Binary/default/sysmon_version.conf`.
-3.  On your Splunk Deployment Server, reload the deployment server (`./splunk reload deploy-server` or use the UI).
+1.  Replace the `Sysmon.exe` file in `TA_Sysmon-Binary/bin/`.
+2.  On your Splunk Deployment Server, reload the deployment server (`./splunk reload deploy-server` or use the UI). The TA will be pushed, and the `deploy.bat` script will handle the upgrade.
 
 ### To Update the Sysmon Configuration:
-1.  Edit your main configuration file: `TA-Sysmon-Config/bin/config.xml`.
-2.  Reload the deployment server. The `TA-Sysmon-Config` app will be pushed to clients, and the new configuration will be applied.
+1.  Edit your main configuration file: `TA_Sysmon-Config/bin/config.xml`.
+2.  Reload the deployment server. The `TA-Sysmon-Config` app will be pushed to clients, and the `update.bat` script will apply the new configuration.
 
 ---
 
 ## Logging & Troubleshooting
 
-All deployment actions are logged on the client machines for troubleshooting. All logs are forwarded to Splunk into the `sysmon` index by default.
+All deployment actions are logged on the client machines inside a dedicated Sysmon folder. The `inputs.conf` within each TA is configured to monitor these logs and the Sysmon Windows Event Log, forwarding all data to the `sysmon` index in Splunk by default.
 
-- **Installer/Upgrade Logs:** `C:\Windows\sysmon_installer.log`
-  - Generated by `TA-Sysmon-Binary`.
-- **Configuration Update Logs:** `C:\Windows\sysmon_config_updater.log`
-  - Generated by `TA-Sysmon-Config`.
+- **Installer/Upgrade Logs:** `C:\Windows\Sysmon\sysmon_installer.log`
+  - Generated by `TA_Sysmon-Binary`.
+- **Configuration Update Logs:** `C:\Windows\Sysmon\sysmon_config_updater.log`
+  - Generated by `TA_Sysmon-Config`.
