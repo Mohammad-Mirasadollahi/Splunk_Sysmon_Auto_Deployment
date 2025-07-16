@@ -20,10 +20,16 @@ REM --- A temporary file used to capture the output of Sysmon version checks.
 SET "TEMP_OUTPUT_FILE=%TEMP%\sysmon_version_check.tmp"
 
 REM --- Paths to the files bundled with this script.
-REM --- %~dp0 expands to the directory where this batch script is located.
+REM --- %~dp0 expands to the directory where this batch script is located (the 'bin' folder).
 SET "SCRIPT_DIR=%~dp0"
 SET "LOCAL_SYSMON_EXE=%SCRIPT_DIR%Sysmon.exe"
-SET "BUNDLED_CONFIG_FILE=%SCRIPT_DIR%config.xml"
+
+REM --- [MODIFIED FOR SPLUNK ADD-ON STRUCTURE]
+REM --- The 'default' and 'local' folders are one level above the 'bin' directory.
+REM --- We use '..' to navigate up one level from the script's location.
+SET "ADDON_ROOT_DIR=%SCRIPT_DIR%..\"
+SET "LOCAL_CONF_FILE=%ADDON_ROOT_DIR%local\sysmon_version.conf"
+SET "DEFAULT_CONF_FILE=%ADDON_ROOT_DIR%default\sysmon_version.conf"
 
 REM --- Full paths to the components as they will exist on the target system.
 SET "INSTALLED_SYSMON_EXE=%TARGET_DIR%\Sysmon.exe"
@@ -39,9 +45,9 @@ IF NOT EXIST "%TARGET_DIR%" MKDIR "%TARGET_DIR%"
 
 CALL :log "INFO" "action='start_execution' script_name='deploy.bat'"
 
-REM --- Critical check: The script cannot run without the Sysmon executable.
+REM --- Critical check: The script cannot run without the Sysmon executable in the 'bin' folder.
 IF NOT EXIST "%LOCAL_SYSMON_EXE%" (
-    CALL :log "ERROR" "action='check_local_file' status='fatal' message='Sysmon.exe not found next to the script.'"
+    CALL :log "ERROR" "action='check_local_file' status='fatal' message='Sysmon.exe not found in the bin folder next to the script.'"
     GOTO :EOF
 )
 
@@ -129,23 +135,27 @@ REM --- ======================================================================
         EXIT /B 1
     )
 
-    REM --- Handle the configuration file with a clear priority order.
-    IF EXIST "%FINAL_CONFIG_FILE%" (
-        REM --- Priority 1: A config file already exists in the target directory. Respect user's custom config.
-        CALL :log "INFO" "action='config_check' status='found_existing' message='Using existing user config file.'"
-    ) ELSE IF EXIST "%BUNDLED_CONFIG_FILE%" (
-        REM --- Priority 2: No user config exists, so copy the bundled config file.
-        CALL :log "INFO" "action='config_check' status='found_bundled' message='Copying bundled config file to target directory.'"
-        COPY /Y "%BUNDLED_CONFIG_FILE%" "%FINAL_CONFIG_FILE%" > NUL
-        IF %ERRORLEVEL% NEQ 0 (
-            CALL :log "ERROR" "action='copy_config' status='failed' error_code='%ERRORLEVEL%'"
-            EXIT /B 1
-        )
+    REM --- Handle the configuration file with priority for the 'local' folder.
+    IF EXIST "%LOCAL_CONF_FILE%" (
+        REM --- Priority 1: Use the config file from the 'local' directory.
+        CALL :log "INFO" "action='config_check' status='found_local' message='Using local config file from %LOCAL_CONF_FILE%'"
+        COPY /Y "%LOCAL_CONF_FILE%" "%FINAL_CONFIG_FILE%" > NUL
+    ) ELSE IF EXIST "%DEFAULT_CONF_FILE%" (
+        REM --- Priority 2: 'local' not found, use the config file from the 'default' directory.
+        CALL :log "INFO" "action='config_check' status='found_default' message='Using default config file from %DEFAULT_CONF_FILE%'"
+        COPY /Y "%DEFAULT_CONF_FILE%" "%FINAL_CONFIG_FILE%" > NUL
     ) ELSE (
         REM --- Fatal Error: No config file available anywhere. The script cannot proceed.
-        CALL :log "ERROR" "action='config_check' status='fatal' message='No config file found. Cannot proceed.'"
+        CALL :log "ERROR" "action='config_check' status='fatal' message='No config file found in local or default directories. Cannot proceed.'"
         EXIT /B 1
     )
+    
+    REM --- Check if the config copy command was successful.
+    IF %ERRORLEVEL% NEQ 0 (
+        CALL :log "ERROR" "action='copy_config' status='failed' error_code='%ERRORLEVEL%'"
+        EXIT /B 1
+    )
+    
     EXIT /B 0
 
 :install_service
