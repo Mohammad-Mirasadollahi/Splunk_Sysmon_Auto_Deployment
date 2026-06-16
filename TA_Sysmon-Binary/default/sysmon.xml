@@ -1,0 +1,14 @@
+<Sysmon schemaversion="4.90">
+  <!-- Minimal configuration: log process activity only. -->
+  <EventFiltering>
+    <!-- Event ID 1: log every process creation (empty "exclude" excludes nothing). -->
+    <RuleGroup name="ProcessCreate" groupRelation="or">
+      <ProcessCreate onmatch="exclude" />
+    </RuleGroup>
+
+    <!-- Event ID 5: log every process termination. -->
+    <RuleGroup name="ProcessTerminate" groupRelation="or">
+      <ProcessTerminate onmatch="exclude" />
+    </RuleGroup>
+  </EventFiltering>
+</Sysmon>
