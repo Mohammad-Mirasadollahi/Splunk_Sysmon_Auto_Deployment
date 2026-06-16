@@ -11,9 +11,9 @@ The framework is split into two distinct Splunk Technical Add-ons (TAs) to separ
 ### 1. `TA-Sysmon-Binary` (The Installer)
 This TA is responsible for the Sysmon software installation lifecycle.
 - **Manages the `sysmon.exe` binary itself.**
-- **Installs the Sysmon service** for the first time using the `config.xml` bundled with it as a default.
-- **Upgrades the Sysmon service** to a new version when you update the binary within the TA.
-- **Intelligently preserves existing user configurations** found in `C:\Windows\Sysmon\` during an upgrade.
+- **Installs the Sysmon service** for the first time using a minimal, process-only default config (`default/sysmon.xml`) bundled with it.
+- **Upgrades the Sysmon service** to a new version when you update the binary within the TA (detected directly from `Sysmon.exe`).
+- **Applies its bundled minimal config** (`default/sysmon.xml`, process events only) so the service is functional out of the box. Detailed production rules are owned by `TA-Sysmon-Config`.
 - **Handles uninstallation** and process cleanup via its `deploy.bat` script.
 - This TA should be updated infrequently, only when a new version of Sysmon is released.
 
@@ -36,6 +36,7 @@ Follow these steps to set up the framework.
   ```
   TA_Sysmon-Binary/bin/
   ```
+- The bundled bootstrap config lives at `TA_Sysmon-Binary/default/sysmon.xml` (a minimal, process-only config). Edit it only if you want to change the default applied at first install.
 
 **2. Define Your Authoritative Sysmon Configuration:**
 - Customize the following file with your own sysmon configuration. You can also use [sysmon-modular](https://github.com/olafhartong/sysmon-modular):
@@ -54,8 +55,7 @@ Follow these steps to set up the framework.
 
 ### To Upgrade the Sysmon Version:
 1.  Replace the existing Sysmon.exe file with the new one in `TA_Sysmon-Binary/bin/`.
-2.  Open the `sysmon_version.conf` file and update the version to match the new Sysmon version.
-3.  On your Splunk Deployment Server, reload the deployment server (`./splunk reload deploy-server` or use the UI). The TA will be pushed, and the `deploy.bat` script will handle the upgrade.
+2.  On your Splunk Deployment Server, reload the deployment server (`./splunk reload deploy-server` or use the UI). The TA will be pushed, and the `deploy.bat` script will detect the new version directly from `Sysmon.exe` and handle the upgrade automatically.
 
 ### To Update the Sysmon Configuration:
 1.  Edit your main configuration file: `TA_Sysmon-Config/bin/config.xml`.
