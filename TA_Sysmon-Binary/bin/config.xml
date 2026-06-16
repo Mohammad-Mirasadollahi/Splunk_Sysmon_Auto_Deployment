@@ -1,5 +1,9 @@
-<Sysmon schemaversion="5.0">
+<Sysmon schemaversion="4.90">
   <EventFiltering>
-    <ProcessCreate onmatch="include" />
+    <!-- Event ID 1: Log ALL Process Creations -->
+    <RuleGroup name="Process_Creation" groupRelation="or">
+      <!-- "exclude" with no rules inside means "do not exclude anything" -> log everything -->
+      <ProcessCreate onmatch="exclude" />
+    </RuleGroup>
   </EventFiltering>
 </Sysmon>
