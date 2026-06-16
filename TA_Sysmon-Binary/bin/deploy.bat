@@ -27,9 +27,10 @@ SET "LOCAL_SYSMON_EXE=%SCRIPT_DIR%Sysmon.exe"
 REM --- [MODIFIED FOR SPLUNK ADD-ON STRUCTURE]
 REM --- The 'default' and 'local' folders are one level above the 'bin' directory.
 REM --- We use '..' to navigate up one level from the script's location.
+REM --- [!!! FIXED !!!] Changed from sysmon_version.conf to sysmon.xml to prevent Error 87.
 SET "ADDON_ROOT_DIR=%SCRIPT_DIR%..\"
-SET "LOCAL_CONF_FILE=%ADDON_ROOT_DIR%local\sysmon_version.conf"
-SET "DEFAULT_CONF_FILE=%ADDON_ROOT_DIR%default\sysmon_version.conf"
+SET "LOCAL_CONF_FILE=%ADDON_ROOT_DIR%local\sysmon.xml"
+SET "DEFAULT_CONF_FILE=%ADDON_ROOT_DIR%default\sysmon.xml"
 
 REM --- Full paths to the components as they will exist on the target system.
 SET "INSTALLED_SYSMON_EXE=%TARGET_DIR%\Sysmon.exe"
@@ -127,7 +128,7 @@ REM --- ======================================================================
 
 :prepare_environment
     CALL :log "INFO" "action='prepare_environment' status='starting'"
-    
+
     REM --- Copy the new Sysmon executable from the script's directory to the target directory.
     COPY /Y "%LOCAL_SYSMON_EXE%" "%INSTALLED_SYSMON_EXE%" > NUL
     IF %ERRORLEVEL% NEQ 0 (
@@ -146,21 +147,21 @@ REM --- ======================================================================
         COPY /Y "%DEFAULT_CONF_FILE%" "%FINAL_CONFIG_FILE%" > NUL
     ) ELSE (
         REM --- Fatal Error: No config file available anywhere. The script cannot proceed.
-        CALL :log "ERROR" "action='config_check' status='fatal' message='No config file found in local or default directories. Cannot proceed.'"
+        CALL :log "ERROR" "action='config_check' status='fatal' message='No valid XML config file found in local or default directories. Cannot proceed.'"
         EXIT /B 1
     )
-    
+
     REM --- Check if the config copy command was successful.
     IF %ERRORLEVEL% NEQ 0 (
         CALL :log "ERROR" "action='copy_config' status='failed' error_code='%ERRORLEVEL%'"
         EXIT /B 1
     )
-    
+
     EXIT /B 0
 
 :install_service
     CALL :log "INFO" "action='install_service' status='starting' config_path='%FINAL_CONFIG_FILE%'"
-    
+
     REM --- Install the service using the new executable and the determined config file.
     REM --- -accepteula is crucial for non-interactive/automated execution.
     "%INSTALLED_SYSMON_EXE%" -accepteula -i "%FINAL_CONFIG_FILE%" > NUL
@@ -173,7 +174,7 @@ REM --- ======================================================================
 
 :uninstall_service
     CALL :log "INFO" "action='uninstall_service' status='starting'"
-    
+
     REM --- If the executable doesn't exist, we can assume it's not installed. Exit gracefully.
     IF NOT EXIST "%INSTALLED_SYSMON_EXE%" ( EXIT /B 0 )
 
@@ -188,7 +189,7 @@ REM --- ======================================================================
 
 :force_kill_process
     CALL :log "INFO" "action='force_kill_process' status='starting' process_name='sysmon.exe'"
-    
+
     REM --- Forcefully terminate any lingering sysmon.exe process.
     REM --- /T also terminates any child processes.
     REM --- Redirect output to NUL to suppress errors if the process is not found.
@@ -197,7 +198,7 @@ REM --- ======================================================================
 
 :verify_service_status
     CALL :log "INFO" "action='verify_service_status' status='checking' service_name='!SERVICE_NAME!'"
-    
+
     REM --- Check if the service is in the RUNNING state.
     sc query "!SERVICE_NAME!" | find "STATE" | find "RUNNING" >nul
     IF %ERRORLEVEL% NEQ 0 (
@@ -217,10 +218,11 @@ REM --- ======================================================================
 :get_target_version
     SET "TARGET_SYSMON_VERSION="
     REM --- Read version from the executable bundled with the script.
-    "%LOCAL_SYSMON_EXE%" > "%TEMP_OUTPUT_FILE%" 2>&1
+    REM --- Added '-accepteula' to prevent GUI prompts from freezing the script execution.
+    "%LOCAL_SYSMON_EXE%" -accepteula > "%TEMP_OUTPUT_FILE%" 2>&1
     IF NOT EXIST "%TEMP_OUTPUT_FILE%" ( GOTO :EOF )
     FOR /F "tokens=3" %%v IN ('findstr /B "System Monitor" "%TEMP_OUTPUT_FILE%"') DO ( SET "TARGET_SYSMON_VERSION=%%v" )
-    IF DEFINED TARGET_SYSMON_VERSION ( 
+    IF DEFINED TARGET_SYSMON_VERSION (
         SET "TARGET_SYSMON_VERSION=!TARGET_SYSMON_VERSION:v=!"
         CALL :log "INFO" "action='get_target_version' status='success' version='!TARGET_SYSMON_VERSION!'"
     )
@@ -229,14 +231,15 @@ REM --- ======================================================================
 :get_installed_version
     SET "INSTALLED_VERSION="
     REM --- This subroutine should only be called if the service is confirmed to exist.
-    IF NOT EXIST "%INSTALLED_SYSMON_EXE%" ( 
-        GOTO :EOF 
+    IF NOT EXIST "%INSTALLED_SYSMON_EXE%" (
+        GOTO :EOF
     )
     REM --- Read version from the executable currently installed on the system.
-    "%INSTALLED_SYSMON_EXE%" > "%TEMP_OUTPUT_FILE%" 2>&1
+    REM --- Added '-accepteula' to prevent GUI prompts from freezing the script execution.
+    "%INSTALLED_SYSMON_EXE%" -accepteula > "%TEMP_OUTPUT_FILE%" 2>&1
     IF NOT EXIST "%TEMP_OUTPUT_FILE%" ( GOTO :EOF )
     FOR /F "tokens=3" %%v IN ('findstr /B "System Monitor" "%TEMP_OUTPUT_FILE%"') DO ( SET "INSTALLED_VERSION=%%v" )
-    IF DEFINED INSTALLED_VERSION ( 
+    IF DEFINED INSTALLED_VERSION (
         SET "INSTALLED_VERSION=!INSTALLED_VERSION:v=!"
         CALL :log "INFO" "action='get_installed_version' status='success' version='!INSTALLED_VERSION!'"
     ) ELSE (
