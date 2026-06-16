@@ -13,8 +13,8 @@ SET "SCRIPT_DIR=%~dp0"
 SET "LOCAL_SYSMON_EXE=%SCRIPT_DIR%Sysmon.exe"
 
 SET "ADDON_ROOT_DIR=%SCRIPT_DIR%..\"
-SET "LOCAL_CONF_FILE=%ADDON_ROOT_DIR%local\sysmon.xml"
-SET "DEFAULT_CONF_FILE=%ADDON_ROOT_DIR%default\sysmon.xml"
+SET "LOCAL_CONF_FILE=%ADDON_ROOT_DIR%local\config.xml"
+SET "DEFAULT_CONF_FILE=%ADDON_ROOT_DIR%default\config.xml"
 
 SET "INSTALLED_SYSMON_EXE=%TARGET_DIR%\Sysmon.exe"
 SET "FINAL_CONFIG_FILE=%TARGET_DIR%\config.xml"
@@ -43,9 +43,6 @@ GOTO :EOF
         EXIT /B 1
     )
 
-    CALL :resolve_source_config
-    IF NOT DEFINED SOURCE_CONFIG_FILE EXIT /B 1
-
     CALL :get_target_version
     IF NOT DEFINED TARGET_SYSMON_VERSION (
         CALL :log "ERROR" "action='read_target_version' status='failed' message='Could not determine version from local Sysmon.exe.'"
@@ -63,7 +60,6 @@ GOTO :EOF
 
     IF "!INSTALLED_VERSION!"=="!TARGET_SYSMON_VERSION!" (
         CALL :log "INFO" "action='decision' status='up_to_date' version='!INSTALLED_VERSION!'"
-        CALL :refresh_config
         CALL :verify_service_status
         EXIT /B 0
     )
@@ -79,7 +75,7 @@ REM --- ======================================================================
     CALL :log "INFO" "action='first_time_install' status='starting'"
     CALL :deploy_exe
     IF ERRORLEVEL 1 EXIT /B 1
-    CALL :deploy_config
+    CALL :ensure_config
     IF ERRORLEVEL 1 EXIT /B 1
     CALL :install_service
     CALL :verify_service_status
@@ -93,24 +89,10 @@ REM --- ======================================================================
     CALL :force_kill_process
     CALL :deploy_exe
     IF ERRORLEVEL 1 EXIT /B 1
-    CALL :deploy_config
+    CALL :ensure_config
     IF ERRORLEVEL 1 EXIT /B 1
     CALL :install_service
     CALL :verify_service_status
-    EXIT /B 0
-
-:refresh_config
-    REM Same version already installed: just push the latest config to the
-    REM running service instead of reinstalling it.
-    CALL :deploy_config
-    IF ERRORLEVEL 1 EXIT /B 1
-    CALL :log "INFO" "action='refresh_config' status='applying'"
-    "%INSTALLED_SYSMON_EXE%" -c "%FINAL_CONFIG_FILE%" >NUL 2>&1
-    IF ERRORLEVEL 1 (
-        CALL :log "WARN" "action='refresh_config' status='failed' error_code='!ERRORLEVEL!'"
-    ) ELSE (
-        CALL :log "INFO" "action='refresh_config' status='success'"
-    )
     EXIT /B 0
 
 :cleanup
@@ -121,20 +103,27 @@ REM --- ======================================================================
 REM --- ======================================================================
 REM --- Subroutines
 REM --- ======================================================================
-:resolve_source_config
+:ensure_config
+    REM Preserve any existing config (it is owned by TA-Sysmon-Config). Only
+    REM lay down our bundled bootstrap config when none is present yet.
+    IF EXIST "%FINAL_CONFIG_FILE%" (
+        CALL :log "INFO" "action='config_check' status='preserved_existing' path='%FINAL_CONFIG_FILE%'"
+        EXIT /B 0
+    )
     SET "SOURCE_CONFIG_FILE="
-    IF EXIST "%LOCAL_CONF_FILE%" (
-        SET "SOURCE_CONFIG_FILE=%LOCAL_CONF_FILE%"
-        CALL :log "INFO" "action='config_check' status='found_local' path='%LOCAL_CONF_FILE%'"
-        EXIT /B 0
+    IF EXIST "%LOCAL_CONF_FILE%" SET "SOURCE_CONFIG_FILE=%LOCAL_CONF_FILE%"
+    IF NOT DEFINED SOURCE_CONFIG_FILE IF EXIST "%DEFAULT_CONF_FILE%" SET "SOURCE_CONFIG_FILE=%DEFAULT_CONF_FILE%"
+    IF NOT DEFINED SOURCE_CONFIG_FILE (
+        CALL :log "ERROR" "action='config_check' status='fatal' message='No bundled config.xml found in local or default directories.'"
+        EXIT /B 1
     )
-    IF EXIST "%DEFAULT_CONF_FILE%" (
-        SET "SOURCE_CONFIG_FILE=%DEFAULT_CONF_FILE%"
-        CALL :log "INFO" "action='config_check' status='found_default' path='%DEFAULT_CONF_FILE%'"
-        EXIT /B 0
+    COPY /Y "!SOURCE_CONFIG_FILE!" "%FINAL_CONFIG_FILE%" >NUL
+    IF ERRORLEVEL 1 (
+        CALL :log "ERROR" "action='deploy_config' status='failed' error_code='!ERRORLEVEL!'"
+        EXIT /B 1
     )
-    CALL :log "ERROR" "action='config_check' status='fatal' message='No valid XML config file found in local or default directories. Cannot proceed.'"
-    EXIT /B 1
+    CALL :log "INFO" "action='deploy_config' status='bootstrapped' source='!SOURCE_CONFIG_FILE!'"
+    EXIT /B 0
 
 :deploy_exe
     COPY /Y "%LOCAL_SYSMON_EXE%" "%INSTALLED_SYSMON_EXE%" >NUL
@@ -143,15 +132,6 @@ REM --- ======================================================================
         EXIT /B 1
     )
     CALL :log "INFO" "action='deploy_exe' status='success'"
-    EXIT /B 0
-
-:deploy_config
-    COPY /Y "%SOURCE_CONFIG_FILE%" "%FINAL_CONFIG_FILE%" >NUL
-    IF ERRORLEVEL 1 (
-        CALL :log "ERROR" "action='deploy_config' status='failed' error_code='!ERRORLEVEL!'"
-        EXIT /B 1
-    )
-    CALL :log "INFO" "action='deploy_config' status='success' source='!SOURCE_CONFIG_FILE!'"
     EXIT /B 0
 
 :install_service

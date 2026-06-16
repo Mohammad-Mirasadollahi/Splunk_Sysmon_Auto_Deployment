@@ -1,0 +1,4 @@
+# The Sysmon binary is downloaded separately and must not be committed.
+Sysmon.exe
+Sysmon64.exe
+TA_Sysmon-Installer/bin/Sysmon.exe

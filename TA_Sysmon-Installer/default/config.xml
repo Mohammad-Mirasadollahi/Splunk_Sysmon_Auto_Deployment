@@ -1,5 +1,7 @@
 <Sysmon schemaversion="4.90">
-  <!-- Minimal configuration: log process activity only. -->
+  <!-- Minimal bootstrap configuration: log process activity only. -->
+  <!-- This is only the default applied at first install. The authoritative -->
+  <!-- production config is owned by TA-Sysmon-Config. -->
   <EventFiltering>
     <!-- Event ID 1: log every process creation (empty "exclude" excludes nothing). -->
     <RuleGroup name="ProcessCreate" groupRelation="or">
